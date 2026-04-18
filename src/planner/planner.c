@@ -1448,6 +1448,30 @@ timescaledb_get_relation_info_hook(PlannerInfo *root, Oid relation_objectid, boo
 			ts_create_private_reloptinfo(rel);
 
 			/*
+			 * Querying a compressed chunk requires Community Edition.
+			 * that lives in the TSL module. Under the Apache license the TSL
+			 * module is not available, so without this check the planner
+			 * would happily return the (nearly empty) contents of the
+			 * uncompressed chunk relation, which is extremely misleading.
+			 * Raise a clear error instead.
+			 */
+			if (ts_license_is_apache())
+			{
+				const Chunk *chunk = ts_planner_chunk_fetch(root, rel);
+
+				if (chunk != NULL && ts_chunk_is_compressed(chunk))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("querying compressed data is not supported under the "
+									"current \"timescaledb.license\""),
+							 errdetail("Chunk \"%s\" is compressed and requires "
+									   "the TimescaleDB Community Edition to query.",
+									   get_rel_name(chunk->table_id)),
+							 errhint("Set timescaledb.license to 'timescale' and install the "
+									 "TimescaleDB Community Edition to query compressed data.")));
+			}
+
+			/*
 			 * We don't want to plan index scans on empty uncompressed tables of
 			 * fully compressed chunks. It takes a lot of time, and these tables
 			 * are empty anyway. Just reset the indexlist in this case. For
