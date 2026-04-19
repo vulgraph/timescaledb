@@ -171,6 +171,28 @@ COMMIT;
 -- And they stay started
 SELECT wait_worker_counts(1,0,1,0);
 
+-- A single timescaledb_post_restore() should leave the scheduler running,
+-- even if the freshly spawned worker initialised its session settings before
+-- the post_restore txn committed (and therefore saw the still-uncommitted
+-- ALTER DATABASE … SET timescaledb.restoring='on' placeholder). Without the
+-- corresponding fix in the loader's process_settings the placeholder's
+-- reset_val keeps the value 'on', the versioned .so picks it up via
+-- DefineCustomBoolVariable, and the scheduler exits silently.
+SELECT timescaledb_pre_restore();
+SELECT wait_worker_counts(1,0,0,0);
+BEGIN;
+SELECT timescaledb_post_restore();
+-- Force the worker to run BackgroundWorkerInitializeConnectionByOid (which
+-- reads pg_db_role_settings, still showing restoring='on' because we have
+-- not committed yet) before we release the vxid lock.
+SELECT wait_worker_counts(1,0,1,0);
+SELECT pg_sleep(1);
+COMMIT;
+-- After committing, give the scheduler time to either die (bug) or start
+-- processing jobs (fix).
+SELECT pg_sleep(2);
+SELECT wait_worker_counts(1,0,1,0);
+
 -- Make sure dropping the extension means that the scheduler is stopped
 BEGIN;
 DROP EXTENSION timescaledb;

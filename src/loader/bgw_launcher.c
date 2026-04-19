@@ -42,6 +42,7 @@
 
 /* for getting settings correct before loading the versioned scheduler */
 #include "catalog/pg_db_role_setting.h"
+#include "utils/guc.h"
 
 #include "../compat/compat.h"
 #include "../extension_constants.h"
@@ -963,6 +964,20 @@ process_settings(Oid databaseid)
 
 	if (!IsUnderPostmaster)
 		return;
+
+	/*
+	 * Force the database-level placeholder for timescaledb.restoring back to
+	 * "off" before re-reading pg_db_role_settings. ApplySetting only applies
+	 * rows that are present, so a value previously set via ALTER DATABASE …
+	 * SET persists in the placeholder's reset_val even after the row was
+	 * removed by ALTER DATABASE … RESET in the txn we just waited on; passing
+	 * NULL would only restore that stale reset_val. Without this the first
+	 * timescaledb_post_restore() leaves the new scheduler exiting because the
+	 * placeholder still reads 'on' when the versioned .so defines the real
+	 * GUC. A subsequent ApplySetting call (if a row reappears) will overwrite
+	 * this value.
+	 */
+	SetConfigOption(MAKE_EXTOPTION("restoring"), "off", PGC_SUSET, PGC_S_DATABASE);
 
 	relsetting = table_open(DbRoleSettingRelationId, AccessShareLock);
 
